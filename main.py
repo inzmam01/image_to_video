@@ -1,218 +1,287 @@
 import cv2
+import sys
 import argparse
 import numpy as np
 import os
-from pathlib import Path
+import random
 from tqdm import tqdm
+from pathlib import Path
 from effects import VideoEffects
 from transitions import VideoTransitions
 
-
 def parse_args():
-    parser = argparse.ArgumentParser(description="Convert image(s) to video with effects and transitions")
-    parser.add_argument("input_path", nargs="+", help="Path to input image(s) or directory")
-    parser.add_argument("output_path", help="Path to output video")
-    parser.add_argument("--duration", type=float, default=5.0, 
-                       help="Duration per image in seconds (for single image: total duration)")
-    parser.add_argument("--fps", type=int, default=30, 
-                       help="Frames per second")
-    parser.add_argument("--transition_duration", type=float, default=1.0, 
-                       help="Duration of transitions in seconds")
-    parser.add_argument("--effect", type=str, default="zoom_in", 
-                       help="Effect for images (zoom_in, zoom_out, pan_left, pan_right, rotate_cw, rotate_ccw, fade_in, fade_out, warm_shift, cool_shift, vintage_shift)")
-    parser.add_argument("--transition", type=str, default="crossfade", 
-                       help="Transition between images (crossfade, slide_left, slide_right, slide_up, slide_down, zoom_in, zoom_out, warp)")
+    parser = argparse.ArgumentParser(description="Advanced Image-to-Video Converter with Selective Randomization")
+    parser.add_argument("input_path", nargs="+", help="Input image(s) or directory")
+    parser.add_argument("output_path", help="Output video file path")
+    parser.add_argument("--fps", type=int, default=30, help="Output video FPS")
     parser.add_argument("--resolution", type=str, default="1920x1080", 
-                       help="Output video resolution (e.g., 1920x1080)")
+                       help="Output resolution (width x height)")
+    
+    # Duration settings
+    parser.add_argument("--img_duration", type=float, default=3.0, 
+                       help="Duration per image segment (seconds)")
+    parser.add_argument("--transition_duration", type=float, default=1.0, 
+                       help="Transition duration (seconds)")
+    
+    # Effect and transition selection
+    parser.add_argument("--effect", type=str, default="zoom_in", 
+                       help="Effect type (zoom_in/out, pan_*, rotate_*, fade_*, color_*)")
+    parser.add_argument("--transition", type=str, default="crossfade", 
+                       help="Transition type (crossfade, slide_*, zoom_*, warp)")
+    
+    # Randomization options with selective choices
+    parser.add_argument("--random_effects", nargs="*", default=None, metavar="EFFECT",
+                       help="Apply random effects from specified list (e.g., zoom_in pan_left fade_in)")
+    parser.add_argument("--random_transitions", nargs="*", default=None, metavar="TRANSITION",
+                       help="Apply random transitions from specified list (e.g., crossfade slide_left warp)")
+    parser.add_argument("--random_all", action="store_true", 
+                       help="Enable full randomization for all effects and transitions")
+    
+    # Video options
     parser.add_argument("--loop", action="store_true", 
                        help="Loop back to first image at the end")
+    parser.add_argument("--codec", type=str, default="mp4v", 
+                       help="Video codec (mp4v, avc1, vp09)")
+    
     return parser.parse_args()
 
-def get_effect_config(effect_name: str) -> dict:
-    """Get effect configuration based on effect name"""
-    if effect_name == "zoom_in":
-        return {"type": "zoom", "params": {"zoom_type": "in", "zoom_factor": 0.3}}
-    elif effect_name == "zoom_out":
-        return {"type": "zoom", "params": {"zoom_type": "out", "zoom_factor": 0.3}}
-    elif effect_name == "pan_left":
-        return {"type": "pan", "params": {"direction": "left", "intensity": 0.3}}
-    elif effect_name == "pan_right":
-        return {"type": "pan", "params": {"direction": "right", "intensity": 0.3}}
-    elif effect_name == "pan_up":
-        return {"type": "pan", "params": {"direction": "up", "intensity": 0.3}}
-    elif effect_name == "pan_down":
-        return {"type": "pan", "params": {"direction": "down", "intensity": 0.3}}
-    elif effect_name == "rotate_cw":
-        return {"type": "rotate", "params": {"rotation_direction": "cw", "rotations": 1}}
-    elif effect_name == "rotate_ccw":
-        return {"type": "rotate", "params": {"rotation_direction": "ccw", "rotations": 1}}
-    elif effect_name == "fade_in":
-        return {"type": "fade", "params": {"fade_type": "in"}}
-    elif effect_name == "fade_out":
-        return {"type": "fade", "params": {"fade_type": "out"}}
-    elif effect_name == "warm_shift":
-        return {"type": "color_shift", "params": {"shift_type": "warm"}}
-    elif effect_name == "cool_shift":
-        return {"type": "color_shift", "params": {"shift_type": "cool"}}
-    elif effect_name == "vintage_shift":
-        return {"type": "color_shift", "params": {"shift_type": "vintage"}}
-    else:
-        return {"type": "zoom", "params": {"zoom_type": "in", "zoom_factor": 0.3}}
-
-def get_transition_config(transition_name: str) -> dict:
-    """Get transition configuration based on transition name"""
-    if transition_name == "crossfade":
-        return {"type": "crossfade"}
-    elif transition_name == "slide_left":
-        return {"type": "slide", "params": {"direction": "left"}}
-    elif transition_name == "slide_right":
-        return {"type": "slide", "params": {"direction": "right"}}
-    elif transition_name == "slide_up":
-        return {"type": "slide", "params": {"direction": "up"}}
-    elif transition_name == "slide_down":
-        return {"type": "slide", "params": {"direction": "down"}}
-    elif transition_name == "zoom_in":
-        return {"type": "zoom", "params": {"zoom_type": "in"}}
-    elif transition_name == "zoom_out":
-        return {"type": "zoom", "params": {"zoom_type": "out"}}
-    elif transition_name == "warp":
-        return {"type": "warp"}
-    else:
-        return {"type": "crossfade"}
-
-def load_images(input_paths: list) -> list:
-    """Load images from input paths"""
+def load_images(paths):
+    """Load images from file paths or directories"""
     images = []
-    for path in input_paths:
+    for path in paths:
         if os.path.isdir(path):
-            # Load all images in directory
             for file in sorted(os.listdir(path)):
                 if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-                    img_path = os.path.join(path, file)
-                    img = cv2.imread(img_path)
+                    img = cv2.imread(os.path.join(path, file))
                     if img is not None:
                         images.append(img)
         else:
-            # Load single image
             img = cv2.imread(path)
             if img is not None:
                 images.append(img)
-    
+                
     if not images:
-        raise ValueError("No valid images found in input paths")
-    
+        raise ValueError("No valid images found")
     return images
 
-def resize_images(images: list, resolution: tuple) -> list:
-    """Resize images to target resolution"""
-    width, height = resolution
-    resized_images = []
-    for img in images:
-        h, w = img.shape[:2]
-        
-        # Calculate aspect ratio preserving resize
-        target_aspect = width / height
-        img_aspect = w / h
-        
-        if img_aspect > target_aspect:
-            # Image is wider than target
-            new_w = width
-            new_h = int(width / img_aspect)
-        else:
-            # Image is taller than target
-            new_h = height
-            new_w = int(height * img_aspect)
-            
-        # Resize image
-        resized = cv2.resize(img, (new_w, new_h))
-        
-        # Pad to target resolution
-        pad_top = (height - new_h) // 2
-        pad_bottom = height - new_h - pad_top
-        pad_left = (width - new_w) // 2
-        pad_right = width - new_w - pad_left
-        
-        padded = cv2.copyMakeBorder(resized, 
-                                   pad_top, pad_bottom, 
-                                   pad_left, pad_right, 
-                                   cv2.BORDER_CONSTANT, 
-                                   value=(0, 0, 0))
-        resized_images.append(padded)
+def resize_with_padding(image, target_width, target_height):
+    """Resize image while maintaining aspect ratio with padding"""
+    h, w = image.shape[:2]
+    target_aspect = target_width / target_height
+    image_aspect = w / h
     
-    return resized_images
+    if image_aspect > target_aspect:
+        # Fit to width
+        new_w = target_width
+        new_h = int(target_width / image_aspect)
+    else:
+        # Fit to height
+        new_h = target_height
+        new_w = int(target_height * image_aspect)
+    
+    resized = cv2.resize(image, (new_w, new_h))
+    
+    # Calculate padding
+    pad_top = (target_height - new_h) // 2
+    pad_bottom = target_height - new_h - pad_top
+    pad_left = (target_width - new_w) // 2
+    pad_right = target_width - new_w - pad_left
+    
+    # Apply padding
+    padded = cv2.copyMakeBorder(
+        resized, 
+        pad_top, pad_bottom, 
+        pad_left, pad_right, 
+        cv2.BORDER_CONSTANT, 
+        value=(0, 0, 0)
+    )
+    return padded
+
+def get_effect_config(effect_name=None, random_effect=False, effect_pool=None):
+    """Get effect configuration with selective randomization"""
+    # Predefined effects
+    all_effects = {
+        
+        # Zoom effects
+        "zoom_in": {"type": "zoom", "params": {"zoom_type": "in", "zoom_factor": 0.3}},
+        "zoom_out": {"type": "zoom", "params": {"zoom_type": "out", "zoom_factor": 0.3}},
+        
+        # Pan effects
+        "pan_left": {"type": "pan", "params": {"direction": "left", "intensity": 0.3}},
+        "pan_right": {"type": "pan", "params": {"direction": "right", "intensity": 0.3}},
+        "pan_up": {"type": "pan", "params": {"direction": "up", "intensity": 0.3}},
+        "pan_down": {"type": "pan", "params": {"direction": "down", "intensity": 0.3}},
+        
+        # Rotation effects
+        "rotate_cw": {"type": "rotate", "params": {"rotation_direction": "cw", "rotations": 1}},
+        "rotate_ccw": {"type": "rotate", "params": {"rotation_direction": "ccw", "rotations": 1}},
+        
+        # Fade effects
+        "fade_in": {"type": "fade", "params": {"fade_type": "in"}},
+        "fade_out": {"type": "fade", "params": {"fade_type": "out"}},
+        
+        # Color effects
+        "warm_shift": {"type": "color_shift", "params": {"shift_type": "warm"}},
+        "cool_shift": {"type": "color_shift", "params": {"shift_type": "cool"}},
+        "vintage_shift": {"type": "color_shift", "params": {"shift_type": "vintage"}},
+
+    
+    }
+    
+    # Handle selective randomization
+    if effect_pool:
+        valid_effects = [e for e in effect_pool if e in all_effects]
+        if valid_effects:
+            return all_effects[random.choice(valid_effects)]
+        # Fallback to default if no valid effects specified
+        return all_effects["zoom_in"]
+    
+    # Handle full randomization
+    if random_effect:
+        return random.choice(list(all_effects.values()))
+    
+    # Handle fixed effect
+    return all_effects.get(effect_name, all_effects["zoom_in"])
+
+def get_transition_config(transition_name=None, random_transition=False, transition_pool=None):
+    """Get transition configuration with selective randomization"""
+    # Predefined transitions
+    all_transitions = {
+        "crossfade": {"type": "crossfade"},
+        "slide_left": {"type": "slide", "params": {"direction": "left"}},
+        "slide_right": {"type": "slide", "params": {"direction": "right"}},
+        "slide_up": {"type": "slide", "params": {"direction": "up"}},
+        "slide_down": {"type": "slide", "params": {"direction": "down"}},
+        "zoom_in": {"type": "zoom", "params": {"zoom_type": "in"}},
+        "zoom_out": {"type": "zoom", "params": {"zoom_type": "out"}},
+        "warp": {"type": "warp"}
+    }
+    
+    # Handle selective randomization
+    if transition_pool:
+        valid_transitions = [t for t in transition_pool if t in all_transitions]
+        if valid_transitions:
+            return all_transitions[random.choice(valid_transitions)]
+        # Fallback to default if no valid transitions specified
+        return all_transitions["crossfade"]
+    
+    # Handle full randomization
+    if random_transition:
+        return random.choice(list(all_transitions.values()))
+    
+    # Handle fixed transition
+    return all_transitions.get(transition_name, all_transitions["crossfade"])
 
 def main():
     args = parse_args()
     
-    # Parse resolution
-    width, height = map(int, args.resolution.split('x'))
+    # Handle randomization flags
+    if args.random_all:
+        args.random_effects = []  # Empty list triggers full randomization
+        args.random_transitions = []  # Empty list triggers full randomization
     
-    # Load and resize images
+    # Load and process images
     images = load_images(args.input_path)
-    images = resize_images(images, (width, height))
+    width, height = map(int, args.resolution.split('x'))
+    processed_images = [resize_with_padding(img, width, height) for img in images]
     
-    # Handle loop option
-    if args.loop and len(images) > 1:
-        images.append(images[0])
+    # Handle looping
+    if args.loop and len(processed_images) > 1:
+        processed_images.append(processed_images[0])
     
-    # Get effect and transition configurations
-    effect_config = get_effect_config(args.effect)
-    transition_config = get_transition_config(args.transition)
+    # Precompute effect configurations
+    effect_configs = []
+    for i in range(len(processed_images)):
+        if args.random_effects is not None:
+            # Selective randomization
+            effect_configs.append(get_effect_config(effect_pool=args.random_effects))
+        else:
+            # Fixed effect
+            effect_configs.append(get_effect_config(args.effect))
     
-    # Calculate durations
-    num_images = len(images)
-    if num_images == 1:
-        # Single image - all time for effect
-        image_duration = args.duration
-        transition_duration = 0
-    else:
-        # Multiple images - split time
-        total_duration = args.duration * num_images
-        image_duration = (total_duration - (num_images - 1) * args.transition_duration) / num_images
-        transition_duration = args.transition_duration
-        if image_duration <= 0:
-            raise ValueError("Total duration too short for the number of images and transitions")
+    # Precompute transition configurations
+    transition_configs = []
+    for i in range(len(processed_images) - 1):
+        if args.random_transitions is not None:
+            # Selective randomization
+            transition_configs.append(get_transition_config(transition_pool=args.random_transitions))
+        else:
+            # Fixed transition
+            transition_configs.append(get_transition_config(args.transition))
+    
+    # Initialize video writer
+    fourcc = cv2.VideoWriter_fourcc(*args.codec)
+    video_writer = cv2.VideoWriter(args.output_path, fourcc, args.fps, (width, height))
     
     # Generate video frames
-    all_frames = []
+    total_frames = 0
     
-    for i in range(num_images):
+    for i, img in enumerate(tqdm(processed_images, desc="Processing images")):
         # Apply effect to current image
         img_frames = VideoEffects.apply_effect(
-            images[i], effect_config, image_duration, args.fps
+            img, 
+            effect_configs[i], 
+            args.img_duration, 
+            args.fps
         )
-        all_frames.extend(img_frames)
         
-        # Apply transition to next image (if not last)
-        if i < num_images - 1:
-            # Get last frame of current image
-            last_frame = all_frames[-1]
+        # Write image frames to video
+        for frame in img_frames:
+            video_writer.write(frame)
+        total_frames += len(img_frames)
+        
+        # Apply transition if not last image
+        if i < len(processed_images) - 1:
+            next_img = processed_images[i + 1]
             
-            # Get first frame of next image with effect applied
-            next_img_frames = VideoEffects.apply_effect(
-                images[i+1], effect_config, image_duration, args.fps
-            )
-            first_next_frame = next_img_frames[0]
+            # Get first frame of next image with its effect
+            next_first_frame = VideoEffects.apply_effect(
+                next_img, 
+                effect_configs[i + 1], 
+                0.1,  # Minimal duration to get first frame
+                args.fps
+            )[0]
             
-            # Apply transition
-            transition_frames = VideoTransitions.apply_transition(
-                last_frame, first_next_frame, 
-                transition_config, transition_duration, args.fps
+            # Generate transition frames
+            trans_frames = VideoTransitions.apply_transition(
+                img_frames[-1], 
+                next_first_frame, 
+                transition_configs[i], 
+                args.transition_duration, 
+                args.fps
             )
-            all_frames.extend(transition_frames)
+            
+            # Write transition frames to video
+            for frame in trans_frames:
+                video_writer.write(frame)
+            total_frames += len(trans_frames)
     
-    # Create video writer
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(args.output_path, fourcc, args.fps, (width, height))
+    # Finalize video
+    video_writer.release()
     
-    # Write frames to video
-    for frame in tqdm(all_frames, desc="Writing video"):
-        out.write(frame)
+    # Print summary
+    total_duration = total_frames / args.fps
+    print(f"\nVideo created: {args.output_path}")
+    print(f"Resolution: {width}x{height} | FPS: {args.fps} | Codec: {args.codec}")
+    print(f"Total frames: {total_frames} | Duration: {total_duration:.2f} seconds")
     
-    out.release()
-    print(f"Video created successfully at {args.output_path}")
-    print(f"Total duration: {len(all_frames)/args.fps:.2f} seconds")
-    print(f"Total frames: {len(all_frames)}")
+    # Effect summary
+    if args.random_effects is not None:
+        if args.random_effects:
+            print("Effects: Full randomization")
+        else:
+            print(f"Effects: Randomized from {args.random_effects}")
+    else:
+        print(f"Effects: Fixed ({args.effect})")
+    
+    # Transition summary
+    if args.random_transitions is not None:
+        if args.random_transitions:
+            print("Transitions: Full randomization")
+        else:
+            print(f"Transitions: Randomized from {args.random_transitions}")
+    else:
+        print(f"Transitions: Fixed ({args.transition})")
 
 if __name__ == "__main__":
     main()
