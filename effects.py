@@ -1,10 +1,12 @@
 import cv2
+import random
 import numpy as np
 from tqdm import tqdm
 from typing import Tuple, List, Dict, Any
 
 
 class VideoEffects:
+   
     @staticmethod
     def zoom_effect(image: np.ndarray, duration: float, fps: int, 
                     zoom_type: str = "in", zoom_factor: float = 0.2) -> List[np.ndarray]:
@@ -25,7 +27,7 @@ class VideoEffects:
             frames.append(frame)
             
         return frames
-
+    
     @staticmethod
     def pan_effect(image: np.ndarray, duration: float, fps: int,
                   direction: str = "left", intensity: float = 0.3) -> List[np.ndarray]:
@@ -154,3 +156,42 @@ class VideoEffects:
         else:
             # Default to static if effect not recognized
             return [image.copy()] * int(duration * fps)
+        
+    @staticmethod
+    def get_random_effect_params() -> dict:
+        """Generate random parameters for effects"""
+        return {
+            "zoom": {
+                "zoom_type": random.choice(["in", "out"]),
+                "zoom_factor": random.uniform(0.1, 0.5)
+            },
+            "pan": {
+                "direction": random.choice(["left", "right", "up", "down"]),
+                "intensity": random.uniform(0.2, 0.8)
+            },
+            "rotate": {
+                "rotation_direction": random.choice(["cw", "ccw"]),
+                "rotations": random.uniform(0.5, 3.0)
+            },
+            "fade": {
+                "fade_type": random.choice(["in", "out"])
+            },
+            "color_shift": {
+                "shift_type": random.choice(["warm", "cool", "vintage"])
+            }
+        }
+
+    @staticmethod
+    def get_random_effect_config() -> dict:
+        """Generate a random effect configuration"""
+        effect_type = random.choice(["zoom", "pan", "rotate", "fade", "color_shift"])
+        return {
+            "type": effect_type,
+            "params": VideoEffects.get_random_effect_params().get(effect_type, {})
+        }
+
+    @staticmethod
+    def apply_random_effect(image: np.ndarray, duration: float, fps: int) -> List[np.ndarray]:
+        """Apply a randomly selected effect to the image"""
+        config = VideoEffects.get_random_effect_config()
+        return VideoEffects.apply_effect(image, config, duration, fps)
