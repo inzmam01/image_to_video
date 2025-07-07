@@ -1,4 +1,5 @@
 import cv2
+import random
 import numpy as np
 from tqdm import tqdm
 from skimage.transform import resize
@@ -161,3 +162,31 @@ class VideoTransitions:
         else:
             # Default to crossfade
             return VideoTransitions.crossfade(img1, img2, duration, fps)
+        
+    @staticmethod
+    def get_random_transition_params() -> dict:
+        """Generate random parameters for transitions"""
+        return {
+            "slide": {
+                "direction": random.choice(["left", "right", "up", "down"])
+            },
+            "zoom": {
+                "zoom_type": random.choice(["in", "out"])
+            }
+        }
+
+    @staticmethod
+    def get_random_transition_config() -> dict:
+        """Generate a random transition configuration"""
+        transition_type = random.choice(["crossfade", "slide", "zoom", "warp"])
+        return {
+            "type": transition_type,
+            "params": VideoTransitions.get_random_transition_params().get(transition_type, {})
+        }
+
+    @staticmethod
+    def apply_random_transition(img1: np.ndarray, img2: np.ndarray, 
+                               duration: float, fps: int) -> list[np.ndarray]:
+        """Apply a randomly selected transition between two images"""
+        config = VideoTransitions.get_random_transition_config()
+        return VideoTransitions.apply_transition(img1, img2, config, duration, fps)
